@@ -1,6 +1,15 @@
 // SPDX-License-Identifier:MIT
 pragma solidity ^0.8.7;
 
+interface myToken
+{
+    function balanceOf(address _address) external view returns(uint256);
+    function transfer(address _to, uint256 _value) external returns (bool success);
+    function decimals() external view returns (uint8);
+    function transferFrom(address _from, address _to, uint256 _value) external returns (bool success);
+}
+
+
 contract lotery
 {
     mapping(address => uint256) public timeStamp;
@@ -14,9 +23,11 @@ contract lotery
     uint256 HashPreSetValue;
     uint32 round;
 
+    myToken private myTokenContract;
+
     modifier rightPrice()
     {
-        require(price==msg.value,"The money you are sending is just not right");
+        require(myTokenContract.balanceOf(msg.sender) >= price,"You don't have enaugh tickets to play");
         _;
     }
     modifier EndGame(bool _comp)
@@ -36,11 +47,11 @@ contract lotery
     }
     modifier balance0()
     {
-        require( ( address(this).balance )==0,"The contract is full of money");
+        require( ( myTokenContract.balanceOf(address(this)) )==0,"The contract is full of money");
         _;
     }
 
-    constructor(uint256 _price, uint8 _playerAmount, uint256 _preSetValue)
+    constructor(uint256 _price, uint8 _playerAmount, uint256 _preSetValue,address _AddrContract)
     {
         price=_price;
         gameOver=false;
@@ -49,6 +60,9 @@ contract lotery
         counter=0;
         HashPreSetValue= hashValue(_preSetValue);
         round=0;
+
+        myTokenContract=myToken(_AddrContract);
+
         emit roundEvent(round,"Hashed",HashPreSetValue);
     }
 
@@ -57,8 +71,13 @@ contract lotery
         return( uint256(keccak256(abi.encode(_value))) );
     }
 
-    function play() public rightPrice EndGame(false) payable
+    function play() public rightPrice EndGame(false)
     { 
+        uint256 balanceAux;
+        balanceAux=myTokenContract.balanceOf(address(this));
+        myTokenContract.transferFrom(msg.sender,address(this), price);
+        require( myTokenContract.balanceOf(address(this)) > balanceAux, "Why don't I have more tokens?" );
+
         counter++;
         timeStamp[msg.sender]=block.timestamp;
         ticketNumber[counter]=msg.sender;
@@ -72,16 +91,24 @@ contract lotery
 
     function pickWinner(uint256 preSetValue) private EndGame(true) onlyOwner rightWinner(preSetValue) returns(address)
     {
+        require(counter<=playerAmount, "If counter is greater than playerAmount means there was a problem");
         uint256 winnerNumber=uint256(keccak256(abi.encode(randomNumber,preSetValue))) % playerAmount;
         address payable winnerAddress;
         winnerAddress= payable( ticketNumber[winnerNumber] );
+        while(winnerAddress==address(0x0))
+        {
+            preSetValue--;
+            winnerNumber=uint256(keccak256(abi.encode(randomNumber,preSetValue))) % playerAmount;
+            winnerAddress= payable( ticketNumber[winnerNumber] );
+        }
         uint256 amountToWinner;
-        amountToWinner=(  ( address(this).balance ) * 8  ) / 10;
-        require( amountToWinner < ( address(this).balance ), "Something is not right with the give-away calculation" );
-        winnerAddress.transfer(amountToWinner);
+        amountToWinner=(  ( myTokenContract.balanceOf(address(this)) ) * 8  ) / 10;
+        require( amountToWinner < ( myTokenContract.balanceOf(address(this)) ), "Something is not right with the give-away calculation" );
+        amountToWinner=mul(amountToWinner,uint256(10)**myTokenContract.decimals());
+        require( myTokenContract.transfer(winnerAddress, amountToWinner) );
         address payable ownerPayable;
         ownerPayable= payable(owner);
-        ownerPayable.transfer(address(this).balance);
+        myTokenContract.transfer(ownerPayable, myTokenContract.balanceOf(address(this)));
         return(winnerAddress);
     }
 
@@ -102,6 +129,28 @@ contract lotery
         HashPreSetValue= hashValue(_preSetValue);
         round++;
         emit roundEvent(round,"Hashed",HashPreSetValue);
+    }
+
+    function hardFaultReset(uint256 _price, uint8 _playerAmount, uint256 _preSetValue) public onlyOwner
+    {
+        price=_price;
+        gameOver=false;
+        playerAmount=_playerAmount;
+        counter=0;
+        HashPreSetValue= hashValue(_preSetValue);
+        round++;
+        emit roundEvent(round,"Hashed",HashPreSetValue);
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256)
+    {
+        if(a==0)
+        {
+            return 0;
+        }
+        uint256 c=a*b;
+        require((c/a)==b);
+        return(c);
     }
 
     event roundEvent(uint32 _roundNumber, string _presetValue, uint256 _number);
